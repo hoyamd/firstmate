@@ -6,12 +6,17 @@
 // sourcing, or running any byte of the submitted command.
 //
 // This file is the sole owner of firstmate's shell command classification.
-// The tokenizer and command-position analysis (Lexer, splitProgram,
-// commandPosition) are exported so the sibling cd-guard policy
-// (bin/fm-cd-command-policy.mjs) reuses the same proven parser instead of
-// duplicating shell lexing; see docs/cd-guard.md. The watcher-arm decision
-// procedure below stays private to this file. The CLI entry point at the bottom
-// runs only when this module is invoked directly, never on import.
+// The tokenizer, command-position analysis, and nested-execution-payload
+// extraction (Lexer, splitProgram, commandPosition, shellInvocation,
+// evalPayload, shellHeredocPayloads, shellHereStringPayloads) are exported so
+// sibling policies reuse the same proven parser instead of duplicating shell
+// lexing: bin/fm-cd-command-policy.mjs (see docs/cd-guard.md) reuses the
+// tokenizer and command-position analysis, and bin/fm-db-reset-command-policy.mjs
+// (see docs/db-reset-guard.md) additionally reuses the nested-payload
+// extraction to recurse into literal `sh -c`/`eval`/heredoc/here-string
+// bodies. The watcher-arm decision procedure below stays private to this
+// file. The CLI entry point at the bottom runs only when this module is
+// invoked directly, never on import.
 
 import path from "node:path";
 import { realpathSync } from "node:fs";
@@ -614,7 +619,7 @@ function hasUnclassifiableProtectedExpansion(word, root) {
   return /(?:^|\/)fm-watch/.test(word.value);
 }
 
-function shellInvocation(position) {
+export function shellInvocation(position) {
   if (!position.command) return null;
   const name = basename(position.command.value);
   if (!["sh", "bash", "zsh"].includes(name)) return null;
@@ -636,13 +641,13 @@ function shellInvocation(position) {
   return { kind: "stdin", payload: null };
 }
 
-function shellHeredocPayloads(tokens, position) {
+export function shellHeredocPayloads(tokens, position) {
   if (shellInvocation(position)?.kind !== "stdin") return [];
   const heredocs = tokens.filter((token) => token.type === "redir" && token.fd === 0 && typeof token.heredoc === "string");
   return heredocs.length === 0 ? [] : [heredocs.at(-1).heredoc];
 }
 
-function shellHereStringPayloads(tokens, position) {
+export function shellHereStringPayloads(tokens, position) {
   if (shellInvocation(position)?.kind !== "stdin") return [];
   const payloads = [];
   for (let i = 0; i < tokens.length; i += 1) {
@@ -659,7 +664,7 @@ function sourcedScript(position) {
   return position.words[position.index + 1] || null;
 }
 
-function evalPayload(position) {
+export function evalPayload(position) {
   if (!position.command || basename(position.command.value) !== "eval") return null;
   const payloads = position.words.slice(position.index + 1);
   if (payloads.length === 0 || payloads.some((payload) => !payload.literal || payload.subs.length > 0)) return null;
