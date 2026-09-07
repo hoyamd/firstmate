@@ -72,7 +72,7 @@ function isDynamicWord(word) {
 }
 
 const GROUP_WORDS = new Set(["db", "migration"]);
-const LEAF_GROUP = { reset: "db", push: "db", up: "migration" };
+const LEAF_WORDS = new Set(["reset", "push", "up"]);
 
 // The supabase CLI (Cobra-based) always keeps a subcommand's group and leaf
 // words adjacent - `db reset`, `db push`, `migration up` - with any flags
@@ -82,10 +82,11 @@ const LEAF_GROUP = { reset: "db", push: "db", up: "migration" };
 // pair anywhere, rather than requiring it at a fixed position, tolerates that
 // without losing precision. A dynamic word occupying either half of an
 // otherwise-literal guarded pair - immediately after a literal `db`/
-// `migration`, or immediately before a literal `reset`/`push`/`up` - cannot
-// be ruled safe by the adjacent-pair scan finding no literal match, since its
-// runtime value could complete the pair. A dynamic word anywhere else in the
-// argument list (unrelated to either half of a guarded pair) stays allowed.
+// `migration`, immediately before a literal `reset`/`push`/`up`, or paired
+// with another dynamic word - cannot be ruled safe by the adjacent-pair scan
+// finding no literal match, since its runtime value could complete the pair.
+// A dynamic word anywhere else in the argument list (unrelated to either half
+// of a guarded pair) stays allowed.
 function matchDbCommand(position) {
   if (!position.command || isDynamicWord(position.command)) return "";
   if (basename(position.command.value) !== "supabase") return "";
@@ -106,8 +107,9 @@ function matchDbCommand(position) {
       if (left.value === "migration" && right.value === "up") return "migration-up-direct";
       continue;
     }
+    if (leftDynamic && rightDynamic) ambiguous = true;
     if (!leftDynamic && rightDynamic && GROUP_WORDS.has(left.value)) ambiguous = true;
-    if (leftDynamic && !rightDynamic && LEAF_GROUP[right.value]) ambiguous = true;
+    if (leftDynamic && !rightDynamic && LEAF_WORDS.has(right.value)) ambiguous = true;
   }
   return ambiguous ? "unclassifiable-db-command" : "";
 }

@@ -75,6 +75,11 @@ matrix_case D32 deny 'supabase db "$X"'
 matrix_case D33 deny 'supabase migration "$X"'
 matrix_case D34 deny 'supabase "$GROUP" reset'
 matrix_case D35 deny 'supabase "$GROUP" up'
+# DENY: both words of an adjacent pair are dynamic - neither runtime value can
+# be ruled out, and either could resolve to a guarded pair.
+matrix_case D36 deny 'A=db; B=reset; supabase "$A" "$B"'
+matrix_case D37 deny 'A=db; B=push; supabase "$A" "$B"'
+matrix_case D38 deny 'A=migration; B=up; supabase "$A" "$B"'
 
 # ALLOW: the guarded wrapper, unrelated supabase subcommands, and data mentions.
 matrix_case A01 allow 'pnpm db:reset'
