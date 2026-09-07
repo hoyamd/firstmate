@@ -82,11 +82,14 @@ const LEAF_WORDS = new Set(["reset", "push", "up"]);
 // pair anywhere, rather than requiring it at a fixed position, tolerates that
 // without losing precision. A dynamic word occupying either half of an
 // otherwise-literal guarded pair - immediately after a literal `db`/
-// `migration`, immediately before a literal `reset`/`push`/`up`, or paired
-// with another dynamic word - cannot be ruled safe by the adjacent-pair scan
-// finding no literal match, since its runtime value could complete the pair.
-// A dynamic word anywhere else in the argument list (unrelated to either half
-// of a guarded pair) stays allowed.
+// `migration`, or immediately before a literal `reset`/`push`/`up` - cannot
+// be ruled safe by the adjacent-pair scan finding no literal match, since its
+// runtime value could complete the pair. A dynamic word anywhere else in the
+// argument list (unrelated to either half of a guarded pair) stays allowed.
+// A fully dynamic adjacent pair with no literal `db`/`migration` anchor is
+// the same accepted opaque-dynamic-dataflow boundary as the concatenated
+// command-name case - see docs/db-reset-guard.md's "Opaque dynamic dataflow"
+// entry.
 function matchDbCommand(position) {
   if (!position.command || isDynamicWord(position.command)) return "";
   if (basename(position.command.value) !== "supabase") return "";
@@ -107,7 +110,6 @@ function matchDbCommand(position) {
       if (left.value === "migration" && right.value === "up") return "migration-up-direct";
       continue;
     }
-    if (leftDynamic && rightDynamic) ambiguous = true;
     if (!leftDynamic && rightDynamic && GROUP_WORDS.has(left.value)) ambiguous = true;
     if (leftDynamic && !rightDynamic && LEAF_WORDS.has(right.value)) ambiguous = true;
   }

@@ -75,11 +75,6 @@ matrix_case D32 deny 'supabase db "$X"'
 matrix_case D33 deny 'supabase migration "$X"'
 matrix_case D34 deny 'supabase "$GROUP" reset'
 matrix_case D35 deny 'supabase "$GROUP" up'
-# DENY: both words of an adjacent pair are dynamic - neither runtime value can
-# be ruled out, and either could resolve to a guarded pair.
-matrix_case D36 deny 'A=db; B=reset; supabase "$A" "$B"'
-matrix_case D37 deny 'A=db; B=push; supabase "$A" "$B"'
-matrix_case D38 deny 'A=migration; B=up; supabase "$A" "$B"'
 
 # ALLOW: the guarded wrapper, unrelated supabase subcommands, and data mentions.
 matrix_case A01 allow 'pnpm db:reset'
@@ -102,6 +97,14 @@ matrix_case A15 allow 'supabase gen types --project-id "$PROJECT_ID"'
 matrix_case A16 allow 'supabase functions deploy "$FUNC_NAME"'
 matrix_case A17 allow 'supabase link --project-ref "$REF"'
 matrix_case A18 allow 'supabase db dump --output "$OUT_FILE"'
+# ALLOW: a fully dynamic adjacent argument pair with no literal db/migration
+# anchor - indistinguishable from two unrelated dynamic flag values sitting
+# next to each other, an accepted opaque-dynamic-dataflow boundary (see
+# docs/db-reset-guard.md's "Opaque dynamic dataflow" entry).
+matrix_case A19 allow 'supabase db dump --output "$OUT_FILE" --schema "$SCHEMA"'
+matrix_case A20 allow 'supabase functions deploy "$FUNC1" "$FUNC2"'
+matrix_case A21 allow 'A=db; B=reset; supabase "$A" "$B"'
+matrix_case A22 allow 'A=migration; B=up; supabase "$A" "$B"'
 
 MATRIX_TMP=$(mktemp -d "${TMPDIR:-/tmp}/fm-db-reset-policy-matrix.XXXXXX")
 FM_TEST_CLEANUP_DIRS+=("$MATRIX_TMP")
