@@ -1,0 +1,42 @@
+db-reset-guard end-to-end PreToolUse hook verification
+Command: bin/fm-db-reset-pretool-check.sh --claude (invoked exactly as the .claude/settings.json PreToolUse hook invokes it, stdin = tool_input JSON)
+
+--- Test 1: raw `supabase db reset --local` -> DENIED ---
+$ echo '{"tool_name":"Bash","tool_input":{"command":"supabase db reset --local"}}' | bin/fm-db-reset-pretool-check.sh --claude
+{"hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"deny"},"systemMessage":"[db-reset-direct] a direct `supabase db reset` bypasses the project's guarded reset wrapper, which refuses to reset a database stack it cannot verify is safe (a primary or corpus-holding stack needs an explicit human override). Run the project's guarded wrapper instead - for example `pnpm db:reset` or `node scripts/db/safe-reset-local.mjs` - never the raw supabase CLI."}
+EXIT:2
+
+--- Test 2: raw `supabase db push` -> DENIED ---
+$ echo '{"tool_name":"Bash","tool_input":{"command":"supabase db push"}}' | bin/fm-db-reset-pretool-check.sh --claude
+{"hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"deny"},"systemMessage":"[db-push-direct] a direct `supabase db push` bypasses the same guarded safety check a raw reset does. Run the project's guarded wrapper instead of the raw supabase CLI."}
+EXIT:2
+
+--- Test 3: guarded wrapper `node scripts/db/safe-reset-local.mjs` -> ALLOWED ---
+$ echo '{"tool_name":"Bash","tool_input":{"command":"node scripts/db/safe-reset-local.mjs"}}' | bin/fm-db-reset-pretool-check.sh --claude
+(no output)
+EXIT:0
+
+--- Test 4: bypass attempt via `bash -c "supabase db reset --local"` -> DENIED ---
+$ echo '{"tool_name":"Bash","tool_input":{"command":"bash -c \"supabase db reset --local\""}}' | bin/fm-db-reset-pretool-check.sh --claude
+{"hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"deny"},"systemMessage":"[db-reset-direct] ..."}
+EXIT:2
+
+--- Test 5: bypass attempt via command substitution `echo $(supabase db reset --local)` -> DENIED ---
+$ echo '{"tool_name":"Bash","tool_input":{"command":"echo $(supabase db reset --local)"}}' | bin/fm-db-reset-pretool-check.sh --claude
+{"hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"deny"},"systemMessage":"[db-reset-direct] ..."}
+EXIT:2
+
+--- Test 6: unrelated command `git status` -> ALLOWED ---
+$ echo '{"tool_name":"Bash","tool_input":{"command":"git status"}}' | bin/fm-db-reset-pretool-check.sh --claude
+(no output)
+EXIT:0
+
+Wiring confirmed present:
+- .claude/settings.json PreToolUse Bash matcher includes fm-db-reset-pretool-check.sh alongside fm-arm-pretool-check.sh and fm-cd-pretool-check.sh
+- .codex/hooks.json PreToolUse includes fm-db-reset-pretool-check.sh following the identical existing template
+
+Automated regression suite: tests/fm-db-reset-pretool-check.test.sh -> 78/78 passed (0 failures), exit 0
+Sibling suites unaffected by shared classifier extension:
+- tests/fm-arm-pretool-check.test.sh -> 146/146 passed
+- tests/fm-cd-pretool-check.test.sh -> 13/13 passed
+- tests/fm-subagent-pretool-check.test.sh -> 13/13 passed
