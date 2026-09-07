@@ -68,6 +68,13 @@ matrix_case D28 deny $'bash <<\'EOF\'\nsupabase db reset --local\nEOF'
 matrix_case D29 deny "bash <<< 'supabase db reset --local'"
 matrix_case D30 deny "su'pa'base db reset --local"
 matrix_case D31 deny 'supabase "db" reset --local'
+# DENY: a dynamic word occupying either half of an otherwise-literal guarded
+# pair - its runtime value could still complete `db reset`/`db push`/
+# `migration up`, so this fails closed rather than silently allowing.
+matrix_case D32 deny 'supabase db "$X"'
+matrix_case D33 deny 'supabase migration "$X"'
+matrix_case D34 deny 'supabase "$GROUP" reset'
+matrix_case D35 deny 'supabase "$GROUP" up'
 
 # ALLOW: the guarded wrapper, unrelated supabase subcommands, and data mentions.
 matrix_case A01 allow 'pnpm db:reset'
@@ -84,6 +91,12 @@ matrix_case A11 allow 'grep -r "supabase db reset" docs'
 matrix_case A12 allow 'ls -la'
 matrix_case A13 allow 'git status'
 matrix_case A14 allow "printf '%s\\n' 'supabase db reset --local'"
+# ALLOW: unrelated, real supabase subcommands with a dynamic flag value or
+# positional argument nowhere near either half of a guarded pair.
+matrix_case A15 allow 'supabase gen types --project-id "$PROJECT_ID"'
+matrix_case A16 allow 'supabase functions deploy "$FUNC_NAME"'
+matrix_case A17 allow 'supabase link --project-ref "$REF"'
+matrix_case A18 allow 'supabase db dump --output "$OUT_FILE"'
 
 MATRIX_TMP=$(mktemp -d "${TMPDIR:-/tmp}/fm-db-reset-policy-matrix.XXXXXX")
 FM_TEST_CLEANUP_DIRS+=("$MATRIX_TMP")
