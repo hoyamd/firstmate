@@ -319,20 +319,44 @@ test_allow_is_silent_both_modes() {
   pass "allow is silent on both stdout and stderr in default and --claude mode"
 }
 
-# --- per-harness wiring: settings carry the new entry ------------------------
+# --- per-harness wiring: the registered hook entry fires end-to-end ---------
+
+wired_hook_command() {
+  jq -r '.hooks.PreToolUse[]?.hooks[]? | select(.command? and (.command | contains("fm-db-reset-pretool-check.sh"))) | .command' "$1" | head -n1
+}
 
 test_claude_settings_wired() {
-  jq -e 'any(.hooks.PreToolUse[]?.hooks[]?.command?; type == "string" and contains("fm-db-reset-pretool-check.sh"))' \
-    "$ROOT/.claude/settings.json" >/dev/null 2>&1 \
-    || fail ".claude/settings.json must register fm-db-reset-pretool-check.sh on a Bash PreToolUse hook"
-  pass ".claude/settings.json wires fm-db-reset-pretool-check.sh"
+  local hook_command payload out rc
+  hook_command=$(wired_hook_command "$ROOT/.claude/settings.json")
+  [ -n "$hook_command" ] || fail ".claude/settings.json must register fm-db-reset-pretool-check.sh on a Bash PreToolUse hook"
+
+  payload=$(jq -cn --arg command 'supabase db reset --local' '{tool_name:"Bash",tool_input:{command:$command}}')
+  out=$(printf '%s' "$payload" | CLAUDE_PROJECT_DIR="$ROOT" bash -c "$hook_command" 2>&1); rc=$?
+  expect_code 2 "$rc" "the wired .claude/settings.json hook entry must deny a raw supabase db reset"
+  assert_contains "$out" '[db-reset-direct]' "the wired Claude hook deny must carry the reason code"
+
+  payload=$(jq -cn --arg command 'supabase status' '{tool_name:"Bash",tool_input:{command:$command}}')
+  out=$(printf '%s' "$payload" | CLAUDE_PROJECT_DIR="$ROOT" bash -c "$hook_command" 2>&1); rc=$?
+  expect_code 0 "$rc" "the wired .claude/settings.json hook entry must allow an unrelated supabase command"
+  [ -z "$out" ] || fail "the wired Claude hook allow must be silent: $out"
+  pass ".claude/settings.json wires fm-db-reset-pretool-check.sh and it fires end-to-end"
 }
 
 test_codex_hooks_wired() {
-  jq -e 'any(.hooks.PreToolUse[]?.hooks[]?.command?; type == "string" and contains("fm-db-reset-pretool-check.sh"))' \
-    "$ROOT/.codex/hooks.json" >/dev/null 2>&1 \
-    || fail ".codex/hooks.json must register fm-db-reset-pretool-check.sh on a Bash PreToolUse hook"
-  pass ".codex/hooks.json wires fm-db-reset-pretool-check.sh"
+  local hook_command payload out rc
+  hook_command=$(wired_hook_command "$ROOT/.codex/hooks.json")
+  [ -n "$hook_command" ] || fail ".codex/hooks.json must register fm-db-reset-pretool-check.sh on a Bash PreToolUse hook"
+
+  payload=$(jq -cn --arg command 'supabase db reset --local' '{tool_name:"Bash",tool_input:{command:$command}}')
+  out=$(cd "$ROOT" && printf '%s' "$payload" | bash -c "$hook_command" 2>&1); rc=$?
+  expect_code 2 "$rc" "the wired .codex/hooks.json hook entry must deny a raw supabase db reset"
+  assert_contains "$out" '[db-reset-direct]' "the wired Codex hook deny must carry the reason code"
+
+  payload=$(jq -cn --arg command 'supabase status' '{tool_name:"Bash",tool_input:{command:$command}}')
+  out=$(cd "$ROOT" && printf '%s' "$payload" | bash -c "$hook_command" 2>&1); rc=$?
+  expect_code 0 "$rc" "the wired .codex/hooks.json hook entry must allow an unrelated supabase command"
+  [ -z "$out" ] || fail "the wired Codex hook allow must be silent: $out"
+  pass ".codex/hooks.json wires fm-db-reset-pretool-check.sh and it fires end-to-end"
 }
 
 # --- shellcheck (belt-and-suspenders; CI/CONTRIBUTING.md also runs this) -----

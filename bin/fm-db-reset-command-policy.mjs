@@ -65,18 +65,28 @@ function basename(value) {
   return value.split("/").filter(Boolean).at(-1) || value;
 }
 
+// A word built from a substitution or an unquoted `$` expansion has no known
+// value until the shell actually expands it.
+function isDynamicWord(word) {
+  return !word.literal || word.subs.length > 0;
+}
+
 // The supabase CLI (Cobra-based) always keeps a subcommand's group and leaf
 // words adjacent - `db reset`, `db push`, `migration up` - with any flags
 // (and their values) surrounding that pair rather than splitting it. Flag
 // values that are not themselves prefixed by `-` can still appear as extra
 // positional-looking words elsewhere in the list; scanning for the adjacent
 // pair anywhere, rather than requiring it at a fixed position, tolerates that
-// without losing precision.
+// without losing precision. A confirmed literal `supabase` invocation whose
+// argument list still contains a dynamic word cannot be ruled safe by the
+// adjacent-pair scan finding no match, since that word's runtime value could
+// resolve to `reset`, `push`, or `up`.
 function matchDbCommand(position) {
-  if (!position.command) return "";
+  if (!position.command || isDynamicWord(position.command)) return "";
   if (basename(position.command.value) !== "supabase") return "";
+  const argumentWords = position.words.slice(position.index + 1);
   const positional = [];
-  for (const word of position.words.slice(position.index + 1)) {
+  for (const word of argumentWords) {
     if (word.value.startsWith("-")) continue;
     positional.push(word.value);
   }
@@ -85,7 +95,7 @@ function matchDbCommand(position) {
     if (positional[i] === "db" && positional[i + 1] === "push") return "db-push-direct";
     if (positional[i] === "migration" && positional[i + 1] === "up") return "migration-up-direct";
   }
-  return "";
+  return argumentWords.some(isDynamicWord) ? "unclassifiable-db-command" : "";
 }
 
 // Recursively finds a deny code anywhere the submitted text could actually
@@ -112,6 +122,7 @@ function analyze(command, depth = 0) {
     const firstName = basename(position.words[0]?.value || "");
     if (COMPOUND_KEYWORDS.has(firstName)) unsupported = true;
     if (position.unresolvedWrapperOption) unsupported = true;
+    if (position.command && isDynamicWord(position.command)) unsupported = true;
 
     const nestedTexts = [];
     for (const token of tokens) {
