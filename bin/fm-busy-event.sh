@@ -14,14 +14,24 @@
 #       the old gen are rejected as stale from then on.
 #
 #   apply <state-dir> <id> <busy|idle|unknown> (--gen G | --current-gen)
-#         --source S --event E
+#         --source S --event E [--turn-ended]
 #       Append one lifecycle event: validate the gen against the armed
 #       sidecar, advance seq under the lock, atomically replace the record.
+#       --turn-ended also touches state/<id>.turn-ended, the watcher
+#       notification, under the same lock, so a writer whose gen was refused,
+#       or whose incarnation is replaced right after, never signals the
+#       replacement.
 #       Adapter wiring passes the exact --gen embedded at arm time, so a
 #       hook that outlives its incarnation fails closed here. The legacy
 #       Claude fm-send --key Escape path (fm-interrupt) and firstmate recovery
 #       paths (fm-recovery) may pass --current-gen to bind to the incarnation
 #       armed right now.
+#
+#   progress <state-dir> <id> --gen G
+#       Refresh state/<id>.progress for observed native-harness activity under
+#       the incarnation lock. This neither changes busy state nor emits a
+#       turn-ended notification. Arm and retire clear the marker, and an old
+#       incarnation can never refresh its replacement's progress.
 #
 #   retire <state-dir> <id> (--gen G | --current-gen)
 #       Remove one incarnation's sidecar and record while holding the same
@@ -38,7 +48,8 @@ usage() {
   cat >&2 <<'EOF'
 usage:
   fm-busy-event.sh arm <state-dir> <id> [--state busy|idle|unknown] [--source S] [--event E]
-  fm-busy-event.sh apply <state-dir> <id> <busy|idle|unknown> (--gen G | --current-gen) --source S --event E
+  fm-busy-event.sh apply <state-dir> <id> <busy|idle|unknown> (--gen G | --current-gen) --source S --event E [--turn-ended]
+  fm-busy-event.sh progress <state-dir> <id> --gen G
   fm-busy-event.sh retire <state-dir> <id> (--gen G | --current-gen)
 See the header comment for the full contract.
 EOF
@@ -51,7 +62,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 CMD=${1:-}
 case "$CMD" in
-  arm|apply|retire) shift ;;
+  arm|apply|progress|retire) shift ;;
   *) usage ;;
 esac
 
@@ -65,6 +76,7 @@ case "$ID" in *[!A-Za-z0-9._-]*) echo "error: invalid task id" >&2; exit 1 ;; es
 NEW_STATE=
 GEN=
 USE_CURRENT_GEN=0
+TURN_ENDED=0
 SOURCE=
 EVENT=
 if [ "$CMD" = apply ]; then
@@ -82,14 +94,17 @@ while [ $# -gt 0 ]; do
     --current-gen) USE_CURRENT_GEN=1; shift ;;
     --source) SOURCE=${2:-}; shift 2 || usage ;;
     --event) EVENT=${2:-}; shift 2 || usage ;;
+    --turn-ended) [ "$CMD" = apply ] || usage; TURN_ENDED=1; shift ;;
     *) usage ;;
   esac
 done
-if [ "$CMD" != retire ]; then
+if [ "$CMD" = apply ] || [ "$CMD" = arm ]; then
   case "$NEW_STATE" in busy|idle|unknown) : ;; *) usage ;; esac
   fm_busy_token_valid "$SOURCE" || { echo "error: invalid --source" >&2; exit 1; }
   fm_busy_token_valid "$EVENT" || { echo "error: invalid --event" >&2; exit 1; }
 fi
+
+[ "$CMD" != progress ] || [ "$USE_CURRENT_GEN" = 0 ] || usage
 
 REC=$(fm_busy_record_path "$STATE" "$ID")
 GEN_FILE=$(fm_busy_gen_path "$STATE" "$ID")
@@ -103,7 +118,7 @@ LOCK="$REC.lock"
 # gets a non-numeric token. Detect the platform once and pick the right form,
 # exactly as bin/fm-watch.sh does.
 if [ "$(uname)" = Darwin ]; then
-  lock_mtime() { stat -f %m "$1" 2>/dev/null; }
+  lock_mtime() { /usr/bin/stat -f %m "$1" 2>/dev/null; }
 else
   lock_mtime() { stat -c %Y "$1" 2>/dev/null; }
 fi
@@ -151,7 +166,7 @@ if [ "$CMD" = arm ]; then
   lock_acquire || exit 1
   {
     printf '%s\n' "$GEN" > "$GEN_FILE.tmp.$$" && mv -f "$GEN_FILE.tmp.$$" "$GEN_FILE" \
-      && write_record "$GEN" 1
+      && write_record "$GEN" 1 && rm -f "$STATE/$ID.progress"
   } || { lock_release; umask "$old_umask"; echo "error: arm failed for $ID" >&2; exit 1; }
   lock_release
   umask "$old_umask"
@@ -159,7 +174,7 @@ if [ "$CMD" = arm ]; then
   exit 0
 fi
 
-# apply / retire
+# apply / progress / retire
 if [ "$USE_CURRENT_GEN" = 1 ] && [ "$CMD" != retire ]; then
   GEN=$(fm_busy_current_gen "$STATE" "$ID") || {
     umask "$old_umask"
@@ -174,7 +189,7 @@ fi
 lock_acquire || { umask "$old_umask"; exit 1; }
 CURRENT=$(fm_busy_current_gen "$STATE" "$ID") || {
   if [ "$CMD" = retire ] && [ ! -e "$GEN_FILE" ] && [ ! -L "$GEN_FILE" ]; then
-    rm -f "$REC" || {
+    rm -f "$REC" "$STATE/$ID.progress" || {
       lock_release
       umask "$old_umask"
       echo "error: busy-state retirement failed for $ID" >&2
@@ -199,12 +214,18 @@ if [ "$GEN" != "$CURRENT" ]; then
   exit 1
 fi
 if [ "$CMD" = retire ]; then
-  rm -f "$GEN_FILE" "$REC" || {
+  rm -f "$GEN_FILE" "$REC" "$STATE/$ID.progress" || {
     lock_release
     umask "$old_umask"
     echo "error: busy-state retirement failed for $ID" >&2
     exit 1
   }
+  lock_release
+  umask "$old_umask"
+  exit 0
+fi
+if [ "$CMD" = progress ]; then
+  touch "$STATE/$ID.progress" || { lock_release; umask "$old_umask"; exit 1; }
   lock_release
   umask "$old_umask"
   exit 0
@@ -229,6 +250,8 @@ write_record "$GEN" $((OLD_SEQ + 1)) || {
   echo "error: record write failed for $ID" >&2
   exit 1
 }
-lock_release
 umask "$old_umask"
+# Best effort: the record already settled, so a failed touch never refuses it.
+[ "$TURN_ENDED" = 0 ] || touch "$STATE/$ID.turn-ended" 2>/dev/null || true
+lock_release
 exit 0
